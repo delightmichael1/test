@@ -1,10 +1,13 @@
-import { useState, useRef, ChangeEvent, DragEvent, useEffect } from "react";
+import { useState, useRef, ChangeEvent, DragEvent } from "react";
 import axios from "axios";
 import Head from "next/head";
 import { motion, AnimatePresence } from "framer-motion";
 import { AiOutlineLoading3Quarters } from "react-icons/ai";
 import { GoUnverified } from "react-icons/go";
 import { GrUpdate } from "react-icons/gr";
+import EasyCrop from "@/components/cropper";
+import { optimizeImage } from "@/libs/imageCompression";
+import getCroppedImg from "@/libs/crop";
 
 interface OCRResult {
   full_text: string;
@@ -28,13 +31,14 @@ interface VerifyAuthenticityResponse {
 }
 
 export default function Home() {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<boolean>(false);
-  const [result, setResult] = useState<VerifyAuthenticityResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<boolean>(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+  const [result, setResult] = useState<VerifyAuthenticityResponse | null>(null);
 
   // Animation variants
   const containerVariants = {
@@ -157,31 +161,47 @@ export default function Home() {
   // Upload file to API
   const handleUpload = async () => {
     if (!selectedFile) return;
+    if (croppedAreaPixels && preview) {
+      const imageName = selectedFile.name;
+      const optimizedImage = await optimizeImage(preview, imageName, "string");
+      if (typeof optimizedImage === "string") {
+        const croppedImage = await getCroppedImg(
+          optimizedImage,
+          croppedAreaPixels
+        );
+        if (croppedImage) {
+          setUploading(true);
+          setError(null);
 
-    setUploading(true);
-    setError(null);
+          try {
+            const fetchResponse = await fetch(croppedImage);
+            const blob = await fetchResponse.blob();
+            const imageFile = new File([blob], imageName, { type: blob.type });
+            const formData = new FormData();
+            formData.append("image", imageFile);
 
-    try {
-      const formData = new FormData();
-      formData.append("image", selectedFile);
+            const response = await axios.post(
+              `${process.env.NEXT_PUBLIC_API_URL}/user/documents`,
+              formData,
+              {
+                headers: {
+                  "Content-Type": "multipart/form-data",
+                },
+              }
+            );
 
-      const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_API_URL}/user/documents`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
+            setResult(response.data);
+          } catch (err: any) {
+            setError(
+              err.response?.data?.message || "Upload failed. Please try again."
+            );
+          } finally {
+            setUploading(false);
+          }
         }
-      );
-
-      setResult(response.data);
-    } catch (err: any) {
-      setError(
-        err.response?.data?.message || "Upload failed. Please try again."
-      );
-    } finally {
-      setUploading(false);
+      } else {
+        console.log("##########################");
+      }
     }
   };
 
@@ -252,10 +272,10 @@ export default function Home() {
               initial="idle"
               animate={isDragOver ? "dragOver" : "idle"}
               whileHover="hover"
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onClick={handleClick}
+              onDragOver={!preview ? handleDragOver : undefined}
+              onDragLeave={!preview ? handleDragLeave : undefined}
+              onDrop={!preview ? handleDrop : undefined}
+              onClick={!preview ? handleClick : undefined}
             >
               <input
                 ref={fileInputRef}
@@ -321,11 +341,18 @@ export default function Home() {
                       animate={{ scale: 1, opacity: 1 }}
                       transition={{ duration: 0.4, delay: 0.1 }}
                     >
-                      <img
+                      <div className="relative aspect-video w-full">
+                        <EasyCrop
+                          image={preview}
+                          aspect={2 / 1}
+                          setCroppedAreaPixels={setCroppedAreaPixels}
+                        />
+                      </div>
+                      {/* <img
                         src={preview}
                         alt="Preview"
                         className="max-h-64 mx-auto rounded-xl shadow-lg"
-                      />
+                      /> */}
                     </motion.div>
                     <motion.div
                       className="flex gap-4 justify-center flex-col md:flex-row"
