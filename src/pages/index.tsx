@@ -224,7 +224,7 @@ export default function Home() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.8, ease: "easeOut" }}
             >
-              🔍 Image Authenticity Verifier
+              🔍 Document Authenticity Verifier
             </motion.h1>
             <motion.p
               className="text-gray-600 text-lg"
