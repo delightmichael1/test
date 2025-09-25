@@ -1,13 +1,14 @@
-import { useState, useRef, ChangeEvent, DragEvent } from "react";
-import axios from "axios";
 import Head from "next/head";
-import { motion, AnimatePresence } from "framer-motion";
-import { AiOutlineLoading3Quarters } from "react-icons/ai";
-import { GoUnverified } from "react-icons/go";
+import getCroppedImg from "@/libs/crop";
 import { GrUpdate } from "react-icons/gr";
 import EasyCrop from "@/components/cropper";
+import { GoUnverified } from "react-icons/go";
 import { optimizeImage } from "@/libs/imageCompression";
-import getCroppedImg from "@/libs/crop";
+import { motion, AnimatePresence } from "framer-motion";
+import { AiOutlineLoading3Quarters } from "react-icons/ai";
+import { useState, useRef, ChangeEvent, DragEvent } from "react";
+import useAxios from "@/hooks/useAxios";
+import Select from "@/components/select";
 
 interface OCRResult {
   full_text: string;
@@ -30,7 +31,28 @@ interface VerifyAuthenticityResponse {
   error: string;
 }
 
+export type DocType = {
+  name: string;
+  aspect: number;
+};
+
+const docTypes = [
+  {
+    name: "Driver's License",
+    aspect: 1.5,
+  },
+  {
+    name: "Passport",
+    aspect: 4 / 5,
+  },
+  {
+    name: "ID Card",
+    aspect: 1.5,
+  },
+];
+
 export default function Home() {
+  const axios = useAxios();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState<boolean>(false);
@@ -39,8 +61,8 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
   const [result, setResult] = useState<VerifyAuthenticityResponse | null>(null);
+  const [selectedDocType, setSelectedDocType] = useState<DocType>(docTypes[0]);
 
-  // Animation variants
   const containerVariants = {
     hidden: { opacity: 0, y: 20 },
     visible: {
@@ -58,38 +80,6 @@ export default function Home() {
     visible: { opacity: 1, y: 0 },
   };
 
-  const dropzoneVariants = {
-    idle: {
-      borderColor: "#d1d5db",
-      backgroundColor: "#ffffff",
-      scale: 1,
-    },
-    hover: {
-      borderColor: "#60a5fa",
-      backgroundColor: "#f9fafb",
-      scale: 1.02,
-      transition: { duration: 0.2 },
-    },
-    dragOver: {
-      borderColor: "#3b82f6",
-      backgroundColor: "#eff6ff",
-      scale: 1.05,
-      transition: { duration: 0.2 },
-    },
-  };
-
-  const loadingVariants = {
-    initial: { rotate: 0 },
-    animate: {
-      rotate: 360,
-    },
-    transition: {
-      duration: 1,
-      repeat: Infinity,
-      ease: "linear",
-    },
-  };
-
   const pulseVariants = {
     initial: { scale: 1, opacity: 0.7 },
     animate: {
@@ -103,11 +93,9 @@ export default function Home() {
     },
   };
 
-  // Handle file selection
   const handleFileSelect = (file: File | null) => {
     if (!file) return;
 
-    // Validate file type
     if (!file.type.startsWith("image/")) {
       setError("Please select an image file only");
       return;
@@ -117,7 +105,6 @@ export default function Home() {
     setError(null);
     setResult(null);
 
-    // Create preview
     const reader = new FileReader();
     reader.onload = (e: ProgressEvent<FileReader>) => {
       if (e.target?.result) {
@@ -127,7 +114,6 @@ export default function Home() {
     reader.readAsDataURL(file);
   };
 
-  // Handle drag and drop
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -148,7 +134,6 @@ export default function Home() {
     }
   };
 
-  // Handle click to select
   const handleClick = () => {
     fileInputRef.current?.click();
   };
@@ -158,54 +143,52 @@ export default function Home() {
     handleFileSelect(file);
   };
 
-  // Upload file to API
   const handleUpload = async () => {
     if (!selectedFile) return;
     if (croppedAreaPixels && preview) {
       const imageName = selectedFile.name;
-      const optimizedImage = await optimizeImage(preview, imageName, "string");
-      if (typeof optimizedImage === "string") {
-        const croppedImage = await getCroppedImg(
-          optimizedImage,
-          croppedAreaPixels
+      const croppedImage = await getCroppedImg(preview, croppedAreaPixels);
+      if (typeof croppedImage === "string") {
+        const optimizedImage = await optimizeImage(
+          croppedImage,
+          imageName,
+          "file"
         );
-        if (croppedImage) {
-          setUploading(true);
-          setError(null);
+        if (typeof optimizedImage === "string") return;
+        setUploading(true);
+        setError(null);
 
-          try {
-            const fetchResponse = await fetch(croppedImage);
-            const blob = await fetchResponse.blob();
-            const imageFile = new File([blob], imageName, { type: blob.type });
-            const formData = new FormData();
-            formData.append("image", imageFile);
+        try {
+          const formData = new FormData();
+          formData.append("image", optimizedImage as Blob);
 
-            const response = await axios.post(
-              `${process.env.NEXT_PUBLIC_API_URL}/user/documents`,
-              formData,
-              {
-                headers: {
-                  "Content-Type": "multipart/form-data",
-                },
-              }
-            );
+          const response = await axios.post("/verify", formData, {
+            headers: {
+              "Content-Type": "multipart/form-data",
+            },
+          });
 
-            setResult(response.data);
-          } catch (err: any) {
+          console.log("############", response.data);
+
+          if (!response.data.result.is_authentic) {
             setError(
-              err.response?.data?.message || "Upload failed. Please try again."
+              response.data.result.reasoning ||
+                "Upload failed. Please try again."
             );
-          } finally {
-            setUploading(false);
+          } else {
+            setResult(response.data);
           }
+        } catch (err: any) {
+          setError(
+            err.response?.data?.message || "Upload failed. Please try again."
+          );
+        } finally {
+          setUploading(false);
         }
-      } else {
-        console.log("##########################");
       }
     }
   };
 
-  // Reset form
   const handleReset = () => {
     setSelectedFile(null);
     setPreview(null);
@@ -234,7 +217,6 @@ export default function Home() {
           initial="hidden"
           animate="visible"
         >
-          {/* Header */}
           <motion.div className="text-center mb-8" variants={itemVariants}>
             <motion.h1
               className="text-4xl font-bold text-gray-800 mb-4"
@@ -261,17 +243,21 @@ export default function Home() {
             whileHover={{ y: -4 }}
             transition={{ duration: 0.3 }}
           >
-            {/* Upload Area */}
+            <div className="w-full flex items-center justify-between mb-4">
+              <span>{selectedDocType.name}</span>
+              <Select
+                docTypes={docTypes}
+                setSelectedDocType={setSelectedDocType}
+              />
+            </div>
             <motion.div
               className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer relative overflow-hidden ${
                 isDragOver
                   ? "border-blue-500 bg-blue-50"
                   : "border-gray-300 hover:border-blue-400"
               }`}
-              variants={dropzoneVariants}
               initial="idle"
               animate={isDragOver ? "dragOver" : "idle"}
-              whileHover="hover"
               onDragOver={!preview ? handleDragOver : undefined}
               onDragLeave={!preview ? handleDragLeave : undefined}
               onDrop={!preview ? handleDrop : undefined}
@@ -284,7 +270,6 @@ export default function Home() {
                 onChange={handleFileInputChange}
                 className="hidden"
               />
-
               <AnimatePresence mode="wait">
                 {!preview ? (
                   <motion.div
@@ -344,15 +329,10 @@ export default function Home() {
                       <div className="relative aspect-video w-full">
                         <EasyCrop
                           image={preview}
-                          aspect={2 / 1}
+                          aspect={selectedDocType.aspect}
                           setCroppedAreaPixels={setCroppedAreaPixels}
                         />
                       </div>
-                      {/* <img
-                        src={preview}
-                        alt="Preview"
-                        className="max-h-64 mx-auto rounded-xl shadow-lg"
-                      /> */}
                     </motion.div>
                     <motion.div
                       className="flex gap-4 justify-center flex-col md:flex-row"
@@ -402,7 +382,6 @@ export default function Home() {
               </AnimatePresence>
             </motion.div>
 
-            {/* Error Display */}
             <AnimatePresence>
               {error && (
                 <motion.div
@@ -433,7 +412,6 @@ export default function Home() {
               )}
             </AnimatePresence>
 
-            {/* Results Display */}
             <AnimatePresence>
               {result && (
                 <motion.div
@@ -472,7 +450,6 @@ export default function Home() {
                         initial="hidden"
                         animate="visible"
                       >
-                        {/* Authenticity Status */}
                         <motion.div
                           className={`p-6 rounded-xl border-l-4 ${
                             result.result.is_authentic
@@ -520,7 +497,6 @@ export default function Home() {
                           )}
                         </motion.div>
 
-                        {/* Confidence Scores */}
                         <motion.div
                           className="bg-gradient-to-br from-gray-50 to-blue-50 p-6 rounded-xl"
                           variants={itemVariants}
@@ -530,11 +506,11 @@ export default function Home() {
                           <h3 className="text-xl font-semibold mb-6 text-center">
                             📈 Confidence Scores
                           </h3>
-                          <div className="grid md:grid-cols-3 gap-6">
+                          <div className="grid md:grid-cols-2 gap-6">
                             {[
                               {
                                 value: result.result.confidence * 100,
-                                label: "Overall Confidence",
+                                label: "Document Confidence",
                                 color: "blue",
                                 icon: "🎯",
                               },
@@ -544,12 +520,6 @@ export default function Home() {
                                 label: "Authenticity Confidence",
                                 color: "green",
                                 icon: "✅",
-                              },
-                              {
-                                value: result.result.anomaly_score * 100,
-                                label: "Anomaly Score",
-                                color: "red",
-                                icon: "⚠️",
                               },
                             ].map((item, index) => (
                               <motion.div
@@ -581,29 +551,6 @@ export default function Home() {
                           </div>
                         </motion.div>
 
-                        {/* Reasoning */}
-                        {result.result.reasoning && (
-                          <motion.div
-                            className="bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-xl"
-                            variants={itemVariants}
-                            whileHover={{ scale: 1.01 }}
-                            transition={{ duration: 0.2 }}
-                          >
-                            <h3 className="text-xl font-semibold mb-4">
-                              🧠 Analysis Reasoning
-                            </h3>
-                            <motion.p
-                              className="text-gray-700 leading-relaxed text-lg"
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              transition={{ delay: 1.2 }}
-                            >
-                              {result.result.reasoning}
-                            </motion.p>
-                          </motion.div>
-                        )}
-
-                        {/* OCR Results */}
                         {result.result.ocr_result && (
                           <motion.div
                             className="bg-gradient-to-br from-yellow-50 to-orange-50 p-6 rounded-xl"
